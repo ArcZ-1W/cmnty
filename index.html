@@ -72,6 +72,8 @@ input:focus-visible,button:focus-visible{outline:3px solid var(--blue);outline-o
 .b{flex:none}
 .pop .empty{margin:auto}
 .pop .send input{min-width:0}
+.del{display:block;margin-top:4px;font:inherit;font-size:.74rem;background:none;border:0;color:inherit;text-decoration:underline;cursor:pointer;padding:0;opacity:.85}
+.row .del{margin:0;color:var(--err);font-size:.9rem;opacity:1}
 </style></head>
 <body>
 
@@ -143,6 +145,10 @@ input:focus-visible,button:focus-visible{outline:3px solid var(--blue);outline-o
 <div class="choice"><button type="button" class="opt" id="aF"></button><button type="button" class="opt" id="aM"></button></div>
 <div id="acw" class="hide"><video id="acam" class="cam" autoplay muted playsinline></video><button class="btn" id="ascan">Ambil muka</button></div>
 <p class="msg" id="am"></p></div>
+<div class="panel hide" id="adm" style="margin-top:14px"><h2 style="margin:6px 4px 0">Admin</h2>
+<p class="mute" style="margin:2px 4px 0">Anggota terdaftar</p>
+<div class="rows" id="ul"></div>
+<button class="btn alt" id="clr">Hapus semua chat</button></div>
 </section>
 </main>
 
@@ -164,7 +170,7 @@ input:focus-visible,button:focus-visible{outline:3px solid var(--blue);outline-o
 <script>
 const $=id=>document.getElementById(id);
 const say=(el,t,ok)=>{el.textContent=t;el.classList.toggle('ok',!!ok)};
-let me,prof,chatReady=false,chan=null;
+let me,prof,chatReady=false,chan=null,isAdmin=false;
 
 /* ---------- boot ---------- */
 async function boot(){
@@ -185,7 +191,9 @@ const rnd=n=>crypto.getRandomValues(new Uint8Array(n));
 const b64=b=>btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
 const unb64=s=>Uint8Array.from(atob(s.replace(/-/g,'+').replace(/_/g,'/')),c=>c.charCodeAt(0));
 const dist=(x,y)=>Math.hypot(...x.map((v,i)=>v-y[i]));
-const errTxt=e=>e.name==='NotAllowedError'?'Dibatalkan atau ditolak. Coba lagi.':(e.message||'Gagal. Coba lagi.');
+const errTxt=e=>e.name==='NotAllowedError'?'Dibatalkan atau ditolak. Coba lagi.':e.name==='InvalidStateError'?'Sidik jari ini sudah terdaftar di perangkat ini.':(e.message||'Gagal. Coba lagi.');
+const normPhone=s=>{let d=s.trim().replace(/[^\d+]/g,'');if(d[0]==='+')d=d.slice(1);else if(d[0]==='0')d='62'+d.slice(1);return d.replace(/\D/g,'')};
+const dupMsg=e=>e.code==='23505'?(/phone/.test(e.message)?'Nomor telepon sudah dipakai.':/username/.test(e.message)?'Nama pengguna sudah dipakai.':/fp/.test(e.message)?'Sidik jari sudah terdaftar.':'Data sudah terdaftar.'):e.message;
 let step=0,bioType=null,fpId=null,faceDesc=null,stream=null,modelsOk=false;
 function stopCam(){if(stream){stream.getTracks().forEach(t=>t.stop());stream=null}}
 async function startCam(v){
@@ -214,13 +222,12 @@ $('lF').innerHTML=$('oF').innerHTML;$('lM').innerHTML=$('oM').innerHTML;
 /* masuk */
 function acc(k){
   const a=getAcc();
-  if(!a){sw(false);return null}
-  if(!(k==='face'?a.desc:a.credId)){say($('lm'),(k==='face'?'Muka':'Sidik jari')+' belum didaftarkan. Tambahkan di Profil.');return null}
+  if(!a||!(k==='face'?a.desc:a.credId)){say($('lm'),'Tidak dikenali.');return null}
   return a;
 }
 async function enter(a){
   const {error}=await db.auth.signInWithPassword({email:a.email,password:a.password});
-  if(error)throw new Error('Akun tidak ditemukan di server. Daftar ulang.');
+  if(error)throw new Error('Tidak dikenali.');
   stopCam();await boot();
 }
 $('lF').onclick=async()=>{
@@ -230,7 +237,7 @@ $('lF').onclick=async()=>{
     if(!window.PublicKeyCredential)throw new Error('Browser ini tidak mendukung sidik jari.');
     await navigator.credentials.get({publicKey:{challenge:rnd(32),allowCredentials:[{type:'public-key',id:unb64(a.credId)}],userVerification:'required',timeout:60000}});
     await enter(a);
-  }catch(e){say($('lm'),errTxt(e))}
+  }catch(e){say($('lm'),e.name==='NotAllowedError'?'Tidak dikenali.':errTxt(e))}
 };
 $('lM').onclick=async()=>{
   say($('lm'),'');const a=acc('face');if(!a)return;
@@ -242,15 +249,19 @@ $('lscan').onclick=async()=>{
   const b=$('lscan');b.disabled=true;say($('lm'),'Memindai...',true);
   try{
     const d=await scan($('lcam'));
-    if(dist(d,a.desc)>0.5)throw new Error('Muka tidak dikenali.');
+    if(dist(d,a.desc)>0.5)throw new Error('Tidak dikenali.');
     await enter(a);
   }catch(e){say($('lm'),errTxt(e))}
   b.disabled=false;
 };
 
 /* daftar */
-document.querySelector('[data-s="0"] [data-next]').onclick=()=>{
-  if($('ru').value.trim().length<3)return say($('rm'),'Nama pengguna minimal 3 karakter.');
+document.querySelector('[data-s="0"] [data-next]').onclick=async()=>{
+  const u=$('ru').value.trim();
+  if(u.length<3)return say($('rm'),'Nama pengguna minimal 3 karakter.');
+  const r=await db.rpc('check_taken',{u,p:null});
+  if(r.error)return say($('rm'),r.error.message);
+  if(r.data==='username')return say($('rm'),'Nama pengguna sudah dipakai.');
   go(1)};
 function pick(t){
   bioType=t;fpId=faceDesc=null;stopCam();say($('rm'),'');
@@ -268,16 +279,21 @@ $('bio').onclick=async()=>{
   try{
     if(bioType==='fingerprint'){
       if(!window.PublicKeyCredential)throw new Error('Browser ini tidak mendukung sidik jari. Gunakan Chrome/Safari lewat HTTPS.');
-      const u=$('ru').value.trim();
+      const u=$('ru').value.trim(),old=getAcc();
       const c=await navigator.credentials.create({publicKey:{
         challenge:rnd(32),rp:{name:'ArcZ Community'},user:{id:rnd(16),name:u,displayName:u},
         pubKeyCredParams:[{type:'public-key',alg:-7},{type:'public-key',alg:-257}],
+        excludeCredentials:old&&old.credId?[{type:'public-key',id:unb64(old.credId)}]:[],
         authenticatorSelection:{authenticatorAttachment:'platform',userVerification:'required'},timeout:60000}});
       fpId=b64(c.rawId);$('ring').classList.add('done');$('fpt').textContent='Sidik jari terdaftar.';
     }else{
       if(!stream)throw new Error('Kamera belum aktif.');
       $('mt').textContent='Memindai...';
-      faceDesc=await scan($('cam'));stopCam();$('mt').textContent='Muka terdaftar.';
+      const d=await scan($('cam'));
+      const r=await db.rpc('face_exists',{d});
+      if(r.error)throw r.error;
+      if(r.data)throw new Error('Muka ini sudah terdaftar.');
+      faceDesc=d;stopCam();$('mt').textContent='Muka terdaftar.';
     }
     btn.classList.add('hide');$('bn').classList.remove('hide');
   }catch(e){
@@ -291,18 +307,22 @@ async function finish(phone){
   $('fin').disabled=$('skip').disabled=true;say($('rm'),'Membuat akun...',true);
   try{
     const u=$('ru').value.trim();
+    const t=await db.rpc('check_taken',{u,p:phone||null});
+    if(t.error)throw t.error;
+    if(t.data==='username')throw new Error('Nama pengguna sudah dipakai.');
+    if(t.data==='phone')throw new Error('Nomor telepon sudah dipakai.');
     const a={email:crypto.randomUUID()+'@arcz.app',password:b64(rnd(24)),type:bioType,credId:fpId,desc:faceDesc};
     const {data,error}=await db.auth.signUp({email:a.email,password:a.password});
     if(error||!data.user)throw new Error(error?.message||'Gagal mendaftar.');
     if(!data.session)throw new Error('Matikan "Confirm email" di Supabase, lalu coba lagi.');
     const p=await db.from('profiles').insert({id:data.user.id,username:u,bio_type:bioType,fingerprint_id:fpId,phone:phone||null,has_face:!!faceDesc});
-    if(p.error){await db.auth.signOut();throw new Error(p.error.code==='23505'?'Nama pengguna sudah dipakai.':p.error.message)}
+    if(p.error){await db.auth.signOut();throw new Error(dupMsg(p.error))}
     if(faceDesc)await db.from('biometrics').insert({user_id:data.user.id,face_descriptor:faceDesc});
     localStorage.setItem(KEY,JSON.stringify(a));
     stopCam();await boot();
   }catch(e){say($('rm'),errTxt(e));$('fin').disabled=$('skip').disabled=false}
 }
-$('fin').onclick=()=>{const t=$('rt').value.trim();if(t&&!/^[0-9+][0-9\s-]{7,15}$/.test(t))return say($('rm'),'Nomor telepon tidak valid.');finish(t)};
+$('fin').onclick=()=>{const t=normPhone($('rt').value);if(t&&!/^\d{9,15}$/.test(t))return say($('rm'),'Nomor telepon tidak valid.');finish(t)};
 $('skip').onclick=()=>finish('');
 
 /* ---------- dashboard ---------- */
@@ -311,6 +331,7 @@ function fill(){
   $('nm').textContent=prof.username;
   yn($('fp'),!!prof.fingerprint_id);yn($('fc'),!!prof.has_face);
   yn($('sfs'),!!prof.fingerprint_id);yn($('sms'),!!prof.has_face);
+  isAdmin=prof.username.toLowerCase()==='arcz';$('adm').classList.toggle('hide',!isAdmin);
   $('jd').textContent=new Date(prof.created_at).toLocaleDateString('id-ID',{day:'numeric',month:'long',year:'numeric'});
   const has=!!prof.phone;$('ph').textContent=has?'Sudah':'Belum';$('ph').className=has?'yes':'no';
   $('pi').value=prof.phone||'';
@@ -329,33 +350,78 @@ document.querySelectorAll('.nav button').forEach(b=>b.onclick=async()=>{
   const i=+b.dataset.i;
   if(i===3){if(chan)db.removeChannel(chan);await db.auth.signOut();return location.reload()}
   if(i===1)return $('pop').classList.contains('hide')?openChat():closeChat();
-  tab=i;stopCam();$('acw').classList.add('hide');closeChat();
+  tab=i;if(i===2&&isAdmin)loadUsers();stopCam();$('acw').classList.add('hide');closeChat();
   [0,2].forEach(n=>$('v'+n).classList.toggle('hide',n!==i));
 });
 
 /* ---------- chat (popup) ---------- */
+const EMPTY='<p class="empty" id="ce">Belum ada pesan. Kirim yang pertama.</p>';
+function rmBubble(id){
+  const el=document.querySelector('#chat [data-id="'+id+'"]');if(el)el.remove();
+  if(!$('chat').querySelector('.b')&&!$('ce'))$('chat').innerHTML=EMPTY;
+}
 function bubble(m){
   const e=$('ce');if(e)e.remove();
   const c=$('chat'),near=c.scrollHeight-c.scrollTop-c.clientHeight<80;
-  const d=document.createElement('div');d.className='b'+(m.user_id===me.id?' me':'');
+  const d=document.createElement('div');d.className='b'+(m.user_id===me.id?' me':'');d.dataset.id=m.id;
   const s=document.createElement('small');s.textContent=m.username;
-  d.append(s,document.createTextNode(m.body));c.append(d);
+  d.append(s,document.createTextNode(m.body));
+  if(isAdmin){
+    const x=document.createElement('button');x.type='button';x.className='del';x.textContent='Hapus';
+    x.onclick=async()=>{const {error}=await db.from('messages').delete().eq('id',m.id);if(error)alert(error.message);else rmBubble(m.id)};
+    d.append(x);
+  }
+  c.append(d);
   if(near||m.user_id===me.id)toBottom();
 }
 async function startChat(){
   chatReady=true;
   const {data}=await db.from('messages').select('*').order('created_at',{ascending:false}).limit(50);
   (data||[]).reverse().forEach(bubble);toBottom();
-  chan=db.channel('msgs').on('postgres_changes',{event:'INSERT',schema:'public',table:'messages'},p=>bubble(p.new)).subscribe();
+  chan=db.channel('msgs')
+    .on('postgres_changes',{event:'INSERT',schema:'public',table:'messages'},p=>bubble(p.new))
+    .on('postgres_changes',{event:'DELETE',schema:'public',table:'messages'},p=>rmBubble(p.old.id))
+    .subscribe();
 }
 $('sf').onsubmit=async e=>{e.preventDefault();const t=$('si').value.trim();if(!t)return;$('si').value='';
   await db.from('messages').insert({user_id:me.id,username:prof.username,body:t})};
 
+/* ---------- admin (nama pengguna "arcz") ---------- */
+async function loadUsers(){
+  const {data,error}=await db.from('profiles').select('id,username,created_at').order('created_at',{ascending:false});
+  const box=$('ul');box.textContent='';
+  if(error){box.textContent=error.message;return}
+  data.forEach(u=>{
+    const r=document.createElement('div');r.className='row';
+    const n=document.createElement('span');n.textContent=u.username;n.style.color='var(--ink)';
+    r.append(n);
+    if(u.id===me.id){const t=document.createElement('b');t.textContent='Admin';r.append(t)}
+    else{
+      const b=document.createElement('button');b.type='button';b.className='del';b.textContent='Hapus';
+      b.onclick=async()=>{
+        if(!confirm('Hapus pengguna '+u.username+' beserta semua datanya?'))return;
+        const x=await db.rpc('admin_delete_user',{uid:u.id});
+        if(x.error)return alert(x.error.message);
+        loadUsers();
+      };
+      r.append(b);
+    }
+    box.append(r);
+  });
+}
+$('clr').onclick=async()=>{
+  if(!confirm('Hapus semua pesan chat?'))return;
+  const {error}=await db.from('messages').delete().gt('id',0);
+  if(error)return alert(error.message);
+  $('chat').innerHTML=EMPTY;
+};
+
 /* ---------- profil ---------- */
-$('pf').onsubmit=async e=>{e.preventDefault();const t=$('pi').value.trim(),m=$('pm');
-  if(!/^[0-9+][0-9\s-]{7,15}$/.test(t)){m.className='msg';m.textContent='Nomor telepon tidak valid.';return}
+$('pf').onsubmit=async e=>{e.preventDefault();const t=normPhone($('pi').value),m=$('pm');
+  m.className='msg';
+  if(!/^\d{9,15}$/.test(t)){m.textContent='Nomor telepon tidak valid.';return}
   const {error}=await db.from('profiles').update({phone:t}).eq('id',me.id);
-  if(error){m.className='msg';m.textContent=error.message;return}
+  if(error){m.textContent=dupMsg(error);return}
   prof.phone=t;fill();m.className='msg ok';m.textContent='Nomor tersimpan.'};
 
 /* ---------- verifikasi di profil ---------- */
@@ -386,6 +452,9 @@ $('ascan').onclick=async()=>{
   try{
     const a=accOrFail();
     const d=await scan($('acam'));
+    const dup=await db.rpc('face_exists',{d,except_user:me.id});
+    if(dup.error)throw dup.error;
+    if(dup.data)throw new Error('Muka ini sudah terdaftar di akun lain.');
     let r=await db.from('biometrics').upsert({user_id:me.id,face_descriptor:d});if(r.error)throw r.error;
     r=await db.from('profiles').update({has_face:true}).eq('id',me.id);if(r.error)throw r.error;
     a.desc=d;localStorage.setItem(KEY,JSON.stringify(a));prof.has_face=true;fill();
