@@ -65,6 +65,13 @@ input:focus-visible,button:focus-visible{outline:3px solid var(--blue);outline-o
 .cam{width:100%;aspect-ratio:1;object-fit:cover;border-radius:18px;border:1.5px solid var(--ink);background:var(--ink);transform:scaleX(-1);margin-top:16px}
 .empty{text-align:center;color:var(--mute);padding:30px 0}
 .top{display:flex;align-items:baseline;justify-content:space-between}
+.pop{position:fixed;left:50%;bottom:98px;transform:translateX(-50%);width:min(92vw,420px);height:min(62vh,500px);z-index:20;display:flex;flex-direction:column;background:var(--card);border:1.5px solid var(--ink);border-radius:22px;padding:14px;box-shadow:0 12px 28px rgba(38,36,31,.25)}
+.ph{display:flex;justify-content:space-between;align-items:center}
+.ph button{border:1.5px solid var(--ink);background:var(--bg);width:34px;height:34px;border-radius:50%;cursor:pointer;display:grid;place-items:center;color:var(--ink)}
+.pop #chat{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;margin:10px 0;padding-right:4px}
+.b{flex:none}
+.pop .empty{margin:auto}
+.pop .send input{min-width:0}
 </style></head>
 <body>
 
@@ -125,18 +132,25 @@ input:focus-visible,button:focus-visible{outline:3px solid var(--blue);outline-o
 <div class="row"><span>Nomor telepon</span><b id="ph">-</b></div>
 </div></div></section>
 
-<section id="v1" class="hide" style="margin-top:20px">
-<div class="top"><h2>Chat</h2><span class="mute">Semua anggota</span></div>
-<div id="chat"><p class="empty" id="ce">Belum ada pesan. Kirim yang pertama.</p></div>
-<form class="send" id="sf"><input id="si" maxlength="500" placeholder="Tulis pesan" autocomplete="off"><button class="btn">Kirim</button></form>
-</section>
 
 <section id="v2" class="hide" style="margin-top:20px">
 <form class="panel" id="pf"><h2 style="margin:6px 4px 0">Nomor telepon</h2>
 <label for="pi">Nomor telepon</label><input id="pi" type="tel" inputmode="tel" placeholder="08xxxxxxxxxx">
 <button class="btn">Simpan nomor</button><p class="msg" id="pm"></p></form>
+<div class="panel" style="margin-top:14px"><h2 style="margin:6px 4px 0">Verifikasi login</h2>
+<div class="rows"><div class="row"><span>Sidik jari</span><b id="sfs">-</b></div><div class="row"><span>Muka</span><b id="sms">-</b></div></div>
+<p class="mute" style="margin:0 4px">Pilih untuk menambah atau mengganti.</p>
+<div class="choice"><button type="button" class="opt" id="aF"></button><button type="button" class="opt" id="aM"></button></div>
+<div id="acw" class="hide"><video id="acam" class="cam" autoplay muted playsinline></video><button class="btn" id="ascan">Ambil muka</button></div>
+<p class="msg" id="am"></p></div>
 </section>
 </main>
+
+<div id="pop" class="pop hide" role="dialog" aria-label="Chat">
+<div class="ph"><h2>Chat</h2><button type="button" id="px" aria-label="Tutup"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+<div id="chat"><p class="empty" id="ce">Belum ada pesan. Kirim yang pertama.</p></div>
+<form class="send" id="sf"><input id="si" maxlength="500" placeholder="Tulis pesan" autocomplete="off"><button class="btn">Kirim</button></form>
+</div>
 
 <nav class="nav hide" id="nav" style="--x:12.5%"><div class="bar"></div><div class="dot"></div>
 <button class="on" data-i="0" aria-label="Beranda"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 11l8-7 8 7v9H4z"/><path d="M10 20v-6h4v6"/></svg></button>
@@ -198,10 +212,10 @@ $('tL').onclick=()=>sw(true);$('tR').onclick=()=>sw(false);
 $('lF').innerHTML=$('oF').innerHTML;$('lM').innerHTML=$('oM').innerHTML;
 
 /* masuk */
-function needAcc(type){
+function acc(k){
   const a=getAcc();
-  if(!a)throw new Error('Belum ada akun di perangkat ini. Daftar dulu.');
-  if(a.type!==type)throw new Error('Akun di perangkat ini memakai '+(a.type==='face'?'muka.':'sidik jari.'));
+  if(!a){sw(false);return null}
+  if(!(k==='face'?a.desc:a.credId)){say($('lm'),(k==='face'?'Muka':'Sidik jari')+' belum didaftarkan. Tambahkan di Profil.');return null}
   return a;
 }
 async function enter(a){
@@ -211,21 +225,22 @@ async function enter(a){
 }
 $('lF').onclick=async()=>{
   stopCam();$('lcw').classList.add('hide');say($('lm'),'');
+  const a=acc('fingerprint');if(!a)return;
   try{
-    const a=needAcc('fingerprint');
     if(!window.PublicKeyCredential)throw new Error('Browser ini tidak mendukung sidik jari.');
     await navigator.credentials.get({publicKey:{challenge:rnd(32),allowCredentials:[{type:'public-key',id:unb64(a.credId)}],userVerification:'required',timeout:60000}});
     await enter(a);
   }catch(e){say($('lm'),errTxt(e))}
 };
 $('lM').onclick=async()=>{
-  say($('lm'),'');
-  try{needAcc('face');$('lcw').classList.remove('hide');await startCam($('lcam'))}catch(e){say($('lm'),e.message)}
+  say($('lm'),'');const a=acc('face');if(!a)return;
+  $('lcw').classList.remove('hide');
+  try{await startCam($('lcam'))}catch(e){say($('lm'),e.message)}
 };
 $('lscan').onclick=async()=>{
+  const a=acc('face');if(!a)return;
   const b=$('lscan');b.disabled=true;say($('lm'),'Memindai...',true);
   try{
-    const a=needAcc('face');
     const d=await scan($('lcam'));
     if(dist(d,a.desc)>0.5)throw new Error('Muka tidak dikenali.');
     await enter(a);
@@ -280,7 +295,7 @@ async function finish(phone){
     const {data,error}=await db.auth.signUp({email:a.email,password:a.password});
     if(error||!data.user)throw new Error(error?.message||'Gagal mendaftar.');
     if(!data.session)throw new Error('Matikan "Confirm email" di Supabase, lalu coba lagi.');
-    const p=await db.from('profiles').insert({id:data.user.id,username:u,bio_type:bioType,fingerprint_id:fpId,phone:phone||null});
+    const p=await db.from('profiles').insert({id:data.user.id,username:u,bio_type:bioType,fingerprint_id:fpId,phone:phone||null,has_face:!!faceDesc});
     if(p.error){await db.auth.signOut();throw new Error(p.error.code==='23505'?'Nama pengguna sudah dipakai.':p.error.message)}
     if(faceDesc)await db.from('biometrics').insert({user_id:data.user.id,face_descriptor:faceDesc});
     localStorage.setItem(KEY,JSON.stringify(a));
@@ -294,33 +309,43 @@ $('skip').onclick=()=>finish('');
 function yn(el,v){el.textContent=v?'Ya':'Tidak';el.className=v?'yes':'no'}
 function fill(){
   $('nm').textContent=prof.username;
-  yn($('fp'),prof.bio_type==='fingerprint'&&!!prof.fingerprint_id);
-  yn($('fc'),prof.bio_type==='face');
+  yn($('fp'),!!prof.fingerprint_id);yn($('fc'),!!prof.has_face);
+  yn($('sfs'),!!prof.fingerprint_id);yn($('sms'),!!prof.has_face);
   $('jd').textContent=new Date(prof.created_at).toLocaleDateString('id-ID',{day:'numeric',month:'long',year:'numeric'});
   const has=!!prof.phone;$('ph').textContent=has?'Sudah':'Belum';$('ph').className=has?'yes':'no';
   $('pi').value=prof.phone||'';
 }
 
+let tab=0;
+function setNav(i){
+  document.querySelectorAll('.nav button').forEach(x=>x.classList.toggle('on',+x.dataset.i===i));
+  $('nav').style.setProperty('--x',(i*25+12.5)+'%');
+}
+function toBottom(){const c=$('chat');c.scrollTop=c.scrollHeight}
+function openChat(){$('pop').classList.remove('hide');setNav(1);if(!chatReady)startChat();requestAnimationFrame(toBottom)}
+function closeChat(){$('pop').classList.add('hide');setNav(tab)}
+$('px').onclick=closeChat;
 document.querySelectorAll('.nav button').forEach(b=>b.onclick=async()=>{
   const i=+b.dataset.i;
   if(i===3){if(chan)db.removeChannel(chan);await db.auth.signOut();return location.reload()}
-  document.querySelectorAll('.nav button').forEach(x=>x.classList.toggle('on',x===b));
-  $('nav').style.setProperty('--x',(i*25+12.5)+'%');
-  [0,1,2].forEach(n=>$('v'+n).classList.toggle('hide',n!==i));
-  if(i===1&&!chatReady)startChat();
+  if(i===1)return $('pop').classList.contains('hide')?openChat():closeChat();
+  tab=i;stopCam();$('acw').classList.add('hide');closeChat();
+  [0,2].forEach(n=>$('v'+n).classList.toggle('hide',n!==i));
 });
 
-/* ---------- chat ---------- */
+/* ---------- chat (popup) ---------- */
 function bubble(m){
   const e=$('ce');if(e)e.remove();
+  const c=$('chat'),near=c.scrollHeight-c.scrollTop-c.clientHeight<80;
   const d=document.createElement('div');d.className='b'+(m.user_id===me.id?' me':'');
   const s=document.createElement('small');s.textContent=m.username;
-  d.append(s,document.createTextNode(m.body));$('chat').append(d);scrollTo(0,document.body.scrollHeight);
+  d.append(s,document.createTextNode(m.body));c.append(d);
+  if(near||m.user_id===me.id)toBottom();
 }
 async function startChat(){
   chatReady=true;
   const {data}=await db.from('messages').select('*').order('created_at',{ascending:false}).limit(50);
-  (data||[]).reverse().forEach(bubble);
+  (data||[]).reverse().forEach(bubble);toBottom();
   chan=db.channel('msgs').on('postgres_changes',{event:'INSERT',schema:'public',table:'messages'},p=>bubble(p.new)).subscribe();
 }
 $('sf').onsubmit=async e=>{e.preventDefault();const t=$('si').value.trim();if(!t)return;$('si').value='';
@@ -332,4 +357,40 @@ $('pf').onsubmit=async e=>{e.preventDefault();const t=$('pi').value.trim(),m=$('
   const {error}=await db.from('profiles').update({phone:t}).eq('id',me.id);
   if(error){m.className='msg';m.textContent=error.message;return}
   prof.phone=t;fill();m.className='msg ok';m.textContent='Nomor tersimpan.'};
+
+/* ---------- verifikasi di profil ---------- */
+$('aF').innerHTML=$('oF').innerHTML;$('aM').innerHTML=$('oM').innerHTML;
+const setM=(t,ok)=>{const m=$('am');m.className='msg'+(ok?' ok':'');m.textContent=t};
+function accOrFail(){const a=getAcc();if(!a)throw new Error('Data login perangkat ini tidak ada. Keluar lalu daftar ulang.');return a}
+$('aF').onclick=async()=>{
+  $('acw').classList.add('hide');stopCam();setM('');
+  try{
+    const a=accOrFail();
+    if(!window.PublicKeyCredential)throw new Error('Browser ini tidak mendukung sidik jari.');
+    const c=await navigator.credentials.create({publicKey:{
+      challenge:rnd(32),rp:{name:'ArcZ Community'},user:{id:rnd(16),name:prof.username,displayName:prof.username},
+      pubKeyCredParams:[{type:'public-key',alg:-7},{type:'public-key',alg:-257}],
+      authenticatorSelection:{authenticatorAttachment:'platform',userVerification:'required'},timeout:60000}});
+    const id=b64(c.rawId);
+    const {error}=await db.from('profiles').update({fingerprint_id:id}).eq('id',me.id);
+    if(error)throw error;
+    a.credId=id;localStorage.setItem(KEY,JSON.stringify(a));prof.fingerprint_id=id;fill();setM('Sidik jari tersimpan.',true);
+  }catch(e){setM(errTxt(e))}
+};
+$('aM').onclick=async()=>{
+  setM('');
+  try{accOrFail();$('acw').classList.remove('hide');await startCam($('acam'))}catch(e){setM(errTxt(e))}
+};
+$('ascan').onclick=async()=>{
+  const b=$('ascan');b.disabled=true;setM('Memindai...',true);
+  try{
+    const a=accOrFail();
+    const d=await scan($('acam'));
+    let r=await db.from('biometrics').upsert({user_id:me.id,face_descriptor:d});if(r.error)throw r.error;
+    r=await db.from('profiles').update({has_face:true}).eq('id',me.id);if(r.error)throw r.error;
+    a.desc=d;localStorage.setItem(KEY,JSON.stringify(a));prof.has_face=true;fill();
+    stopCam();$('acw').classList.add('hide');setM('Muka tersimpan.',true);
+  }catch(e){setM(errTxt(e))}
+  b.disabled=false;
+};
 </script></body></html>
