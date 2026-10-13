@@ -73,11 +73,11 @@ input:focus-visible,button:focus-visible{outline:3px solid var(--blue);outline-o
 <h1>ArcZ Community</h1><p class="mute">Masuk atau buat akun untuk bergabung.</p>
 <div class="tabs"><button id="tL" class="on">Masuk</button><button id="tR">Daftar</button></div>
 
-<form id="login" class="panel" style="margin-top:18px">
-<label for="le">Email</label><input id="le" type="email" autocomplete="email" required>
-<label for="lp">Kata sandi</label><input id="lp" type="password" autocomplete="current-password" required>
-<button class="btn" id="lb">Masuk</button><p class="msg" id="lm"></p>
-</form>
+<section id="login" class="panel" style="margin-top:18px">
+<h2 style="margin:6px 4px 0">Masuk</h2><p class="mute" style="margin:2px 4px 0">Pilih cara masuk. Tanpa email dan kata sandi.</p>
+<div class="choice"><button type="button" class="opt" id="lF"></button><button type="button" class="opt" id="lM"></button></div>
+<div id="lcw" class="hide"><video id="lcam" class="cam" autoplay muted playsinline></video><button class="btn" id="lscan">Pindai muka</button></div>
+<p class="msg" id="lm"></p></section>
 
 <section id="reg" class="panel hide" style="margin-top:18px">
 <div class="steps"><i class="on"></i><i></i><i></i></div>
@@ -85,8 +85,6 @@ input:focus-visible,button:focus-visible{outline:3px solid var(--blue);outline-o
 <div data-s="0">
 <h2 style="margin-top:14px">Buat akun</h2>
 <label for="ru">Nama pengguna</label><input id="ru" minlength="3" maxlength="20" autocomplete="username">
-<label for="re">Email</label><input id="re" type="email" autocomplete="email">
-<label for="rp">Kata sandi (min. 6 karakter)</label><input id="rp" type="password" autocomplete="new-password">
 <button class="btn" data-next>Lanjut</button>
 </div>
 
@@ -148,6 +146,7 @@ input:focus-visible,button:focus-visible{outline:3px solid var(--blue);outline-o
 </nav>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@simplewebauthn/browser@11.0.0/dist/bundle/index.umd.min.js"></script>
 <script src="config.js"></script>
 <script>
 const $=id=>document.getElementById(id);
@@ -167,91 +166,106 @@ async function boot(){
 boot();
 
 /* ---------- auth ---------- */
-$('tL').onclick=()=>sw(true);$('tR').onclick=()=>sw(false);
-function sw(l){$('tL').classList.toggle('on',l);$('tR').classList.toggle('on',!l);$('login').classList.toggle('hide',!l);$('reg').classList.toggle('hide',l)}
-let step=0,bioType=null,fpId=null,faceDesc=null,stream=null,modelsOk=false;
+const FN=SUPABASE_URL+'/functions/v1/arcz-auth';
+async function call(b){
+  const r=await fetch(FN,{method:'POST',headers:{'Content-Type':'application/json',apikey:SUPABASE_KEY,Authorization:'Bearer '+SUPABASE_KEY},body:JSON.stringify(b)});
+  const j=await r.json().catch(()=>({}));
+  if(!r.ok)throw new Error(j.error||'Server tidak merespons.');
+  return j;
+}
+async function enter(j){
+  const {error}=await db.auth.verifyOtp({token_hash:j.token_hash,type:'magiclink'});
+  if(error)throw error;
+  stopCam();await boot();
+}
+const errTxt=e=>e.name==='NotAllowedError'?'Dibatalkan atau ditolak. Coba lagi.':(e.message||'Gagal. Coba lagi.');
+let step=0,bioType=null,fpResp=null,fpCid=null,faceDesc=null,stream=null,modelsOk=false;
+function stopCam(){if(stream){stream.getTracks().forEach(t=>t.stop());stream=null}}
+async function startCam(v){
+  stopCam();
+  try{stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'user'}});v.srcObject=stream}
+  catch(e){throw new Error('Kamera tidak bisa dibuka. Izinkan akses kamera dan buka lewat HTTPS.')}
+}
+function loadScript(src){return new Promise((ok,no)=>{const s=document.createElement('script');s.src=src;s.onload=ok;s.onerror=no;document.head.append(s)})}
+const MODELS='https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.13/model/';
+async function scan(v){
+  if(!modelsOk){
+    if(!window.faceapi)await loadScript('https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.13/dist/face-api.js');
+    await Promise.all([faceapi.nets.tinyFaceDetector.loadFromUri(MODELS),faceapi.nets.faceLandmark68Net.loadFromUri(MODELS),faceapi.nets.faceRecognitionNet.loadFromUri(MODELS)]);
+    modelsOk=true;
+  }
+  const d=await faceapi.detectSingleFace(v,new faceapi.TinyFaceDetectorOptions()).withFaceLandmarks().withFaceDescriptor();
+  if(!d)throw new Error('Muka tidak terdeteksi. Pastikan cahaya cukup dan muka terlihat penuh.');
+  return Array.from(d.descriptor);
+}
 function go(n){step=n;document.querySelectorAll('[data-s]').forEach(e=>e.classList.toggle('hide',+e.dataset.s!==n));
 document.querySelectorAll('.steps i').forEach((e,i)=>e.classList.toggle('on',i<=n));say($('rm'),'')}
+function sw(l){stopCam();$('tL').classList.toggle('on',l);$('tR').classList.toggle('on',!l);$('login').classList.toggle('hide',!l);$('reg').classList.toggle('hide',l)}
+$('tL').onclick=()=>sw(true);$('tR').onclick=()=>sw(false);
+$('lF').innerHTML=$('oF').innerHTML;$('lM').innerHTML=$('oM').innerHTML;
 
-$('login').onsubmit=async e=>{e.preventDefault();$('lb').disabled=true;say($('lm'),'');
-const {error}=await db.auth.signInWithPassword({email:$('le').value.trim(),password:$('lp').value});
-$('lb').disabled=false;
-if(error)say($('lm'),'Email atau kata sandi salah.');else boot()};
+/* masuk */
+$('lF').onclick=async()=>{
+  stopCam();$('lcw').classList.add('hide');say($('lm'),'');
+  try{
+    if(!window.SimpleWebAuthnBrowser)throw new Error('Browser ini tidak mendukung sidik jari.');
+    const o=await call({action:'login_begin'});
+    const resp=await SimpleWebAuthnBrowser.startAuthentication(o.options);
+    await enter(await call({action:'login_fp',cid:o.cid,response:resp}));
+  }catch(e){say($('lm'),errTxt(e))}
+};
+$('lM').onclick=async()=>{
+  say($('lm'),'');$('lcw').classList.remove('hide');
+  try{await startCam($('lcam'))}catch(e){say($('lm'),e.message)}
+};
+$('lscan').onclick=async()=>{
+  const b=$('lscan');b.disabled=true;say($('lm'),'Memindai...',true);
+  try{await enter(await call({action:'login_face',descriptor:await scan($('lcam'))}))}
+  catch(e){say($('lm'),errTxt(e))}
+  b.disabled=false;
+};
 
+/* daftar */
 document.querySelector('[data-s="0"] [data-next]').onclick=()=>{
-const u=$('ru').value.trim(),m=$('re').value.trim(),p=$('rp').value;
-if(u.length<3)return say($('rm'),'Nama pengguna minimal 3 karakter.');
-if(!/^\S+@\S+\.\S+$/.test(m))return say($('rm'),'Format email belum benar.');
-if(p.length<6)return say($('rm'),'Kata sandi minimal 6 karakter.');go(1)};
-
-/* pilih metode */
-function stopCam(){if(stream){stream.getTracks().forEach(t=>t.stop());stream=null}}
+  if($('ru').value.trim().length<3)return say($('rm'),'Nama pengguna minimal 3 karakter.');
+  go(1)};
 function pick(t){
-  bioType=t;fpId=null;faceDesc=null;stopCam();say($('rm'),'');
+  bioType=t;fpResp=fpCid=faceDesc=null;stopCam();say($('rm'),'');
   $('oF').classList.toggle('on',t==='fingerprint');$('oM').classList.toggle('on',t==='face');
   $('pF').classList.toggle('hide',t!=='fingerprint');$('pM').classList.toggle('hide',t!=='face');
   $('ring').classList.remove('done');$('fpt').textContent='Perangkat akan meminta verifikasi sidik jari.';
   $('mt').textContent='Hadapkan muka ke kamera.';
   $('bio').textContent=t==='face'?'Ambil muka':'Daftarkan sidik jari';
   $('bio').classList.remove('hide');$('bn').classList.add('hide');
-  if(t==='face')startCam();
+  if(t==='face')startCam($('cam')).catch(e=>say($('rm'),e.message));
 }
 $('oF').onclick=()=>pick('fingerprint');$('oM').onclick=()=>pick('face');
-
-async function startCam(){
-  try{stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'user'}});$('cam').srcObject=stream}
-  catch(e){say($('rm'),'Kamera tidak bisa dibuka. Izinkan akses kamera dan buka lewat HTTPS.')}
-}
-function loadScript(src){return new Promise((ok,no)=>{const s=document.createElement('script');s.src=src;s.onload=ok;s.onerror=no;document.head.append(s)})}
-const MODELS='https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.13/model/';
-async function loadFace(){
-  if(modelsOk)return;
-  if(!window.faceapi)await loadScript('https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.13/dist/face-api.js');
-  await Promise.all([faceapi.nets.tinyFaceDetector.loadFromUri(MODELS),faceapi.nets.faceLandmark68Net.loadFromUri(MODELS),faceapi.nets.faceRecognitionNet.loadFromUri(MODELS)]);
-  modelsOk=true;
-}
-
-const b64=b=>btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
 $('bio').onclick=async()=>{
   const btn=$('bio');btn.disabled=true;say($('rm'),'');
   try{
     if(bioType==='fingerprint'){
-      if(!window.PublicKeyCredential)throw new Error('Browser ini tidak mendukung sidik jari. Gunakan Chrome/Safari lewat HTTPS.');
-      const c=await navigator.credentials.create({publicKey:{
-        challenge:crypto.getRandomValues(new Uint8Array(32)),rp:{name:'ArcZ Community'},
-        user:{id:crypto.getRandomValues(new Uint8Array(16)),name:$('re').value.trim(),displayName:$('ru').value.trim()},
-        pubKeyCredParams:[{type:'public-key',alg:-7},{type:'public-key',alg:-257}],
-        authenticatorSelection:{authenticatorAttachment:'platform',userVerification:'required'},timeout:60000}});
-      fpId=b64(c.rawId);$('ring').classList.add('done');$('fpt').textContent='Sidik jari terdaftar.';
+      if(!window.SimpleWebAuthnBrowser)throw new Error('Browser ini tidak mendukung sidik jari. Gunakan Chrome/Safari lewat HTTPS.');
+      const o=await call({action:'reg_begin',username:$('ru').value.trim()});
+      fpResp=await SimpleWebAuthnBrowser.startRegistration(o.options);fpCid=o.cid;
+      $('ring').classList.add('done');$('fpt').textContent='Sidik jari terdaftar.';
     }else{
       if(!stream)throw new Error('Kamera belum aktif.');
-      $('mt').textContent='Memuat model muka...';
-      await loadFace();
       $('mt').textContent='Memindai...';
-      const d=await faceapi.detectSingleFace($('cam'),new faceapi.TinyFaceDetectorOptions()).withFaceLandmarks().withFaceDescriptor();
-      if(!d)throw new Error('Muka tidak terdeteksi. Pastikan cahaya cukup dan muka terlihat penuh.');
-      faceDesc=Array.from(d.descriptor);stopCam();$('mt').textContent='Muka terdaftar.';
+      faceDesc=await scan($('cam'));stopCam();$('mt').textContent='Muka terdaftar.';
     }
     btn.classList.add('hide');$('bn').classList.remove('hide');
-  }catch(err){
-    say($('rm'),err.name==='NotAllowedError'?'Dibatalkan atau ditolak. Coba lagi.':(err.message||'Gagal. Coba lagi.'));
+  }catch(e){
+    say($('rm'),errTxt(e));
     if(bioType==='face')$('mt').textContent='Hadapkan muka ke kamera.';
   }
   btn.disabled=false;
 };
-$('bn').onclick=()=>{if(!fpId&&!faceDesc)return say($('rm'),'Pilih dan daftarkan sidik jari atau muka dulu.');go(2)};
-
+$('bn').onclick=()=>{if(!fpResp&&!faceDesc)return say($('rm'),'Daftarkan sidik jari atau muka dulu.');go(2)};
 async function finish(phone){
   $('fin').disabled=$('skip').disabled=true;say($('rm'),'Membuat akun...',true);
-  const re=()=>{$('fin').disabled=$('skip').disabled=false};
-  const {data,error}=await db.auth.signUp({email:$('re').value.trim(),password:$('rp').value});
-  if(error||!data.user){say($('rm'),error?.message||'Gagal mendaftar.');return re()}
-  if(!data.session){say($('rm'),'Akun dibuat. Matikan "Confirm email" di Supabase, atau konfirmasi email lalu masuk.',true);return}
-  const e2=(await db.from('profiles').insert({id:data.user.id,username:$('ru').value.trim(),bio_type:bioType,fingerprint_id:fpId,phone:phone||null})).error;
-  if(e2){say($('rm'),e2.code==='23505'?'Nama pengguna sudah dipakai.':e2.message);return re()}
-  if(faceDesc){const e3=(await db.from('biometrics').insert({user_id:data.user.id,face_descriptor:faceDesc})).error;
-    if(e3){say($('rm'),'Akun dibuat, tapi data muka gagal disimpan: '+e3.message);return re()}}
-  boot();
+  try{
+    await enter(await call({action:'reg_finish',username:$('ru').value.trim(),phone,type:bioType,cid:fpCid,response:fpResp,descriptor:faceDesc}));
+  }catch(e){say($('rm'),errTxt(e));$('fin').disabled=$('skip').disabled=false}
 }
 $('fin').onclick=()=>{const t=$('rt').value.trim();if(t&&!/^[0-9+][0-9\s-]{7,15}$/.test(t))return say($('rm'),'Nomor telepon tidak valid.');finish(t)};
 $('skip').onclick=()=>finish('');
