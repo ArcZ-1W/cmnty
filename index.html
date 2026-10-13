@@ -146,7 +146,6 @@ input:focus-visible,button:focus-visible{outline:3px solid var(--blue);outline-o
 </nav>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@simplewebauthn/browser@11.0.0/dist/bundle/index.umd.min.js"></script>
 <script src="config.js"></script>
 <script>
 const $=id=>document.getElementById(id);
@@ -165,21 +164,15 @@ async function boot(){
 }
 boot();
 
-/* ---------- auth ---------- */
-const FN=SUPABASE_URL+'/functions/v1/arcz-auth';
-async function call(b){
-  const r=await fetch(FN,{method:'POST',headers:{'Content-Type':'application/json',apikey:SUPABASE_KEY,Authorization:'Bearer '+SUPABASE_KEY},body:JSON.stringify(b)});
-  const j=await r.json().catch(()=>({}));
-  if(!r.ok)throw new Error(j.error||'Server tidak merespons.');
-  return j;
-}
-async function enter(j){
-  const {error}=await db.auth.verifyOtp({token_hash:j.token_hash,type:'magiclink'});
-  if(error)throw error;
-  stopCam();await boot();
-}
+/* ---------- auth (tanpa server: login terikat perangkat) ---------- */
+const KEY='arcz_acc';
+const getAcc=()=>{try{return JSON.parse(localStorage.getItem(KEY))}catch(e){return null}};
+const rnd=n=>crypto.getRandomValues(new Uint8Array(n));
+const b64=b=>btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+const unb64=s=>Uint8Array.from(atob(s.replace(/-/g,'+').replace(/_/g,'/')),c=>c.charCodeAt(0));
+const dist=(x,y)=>Math.hypot(...x.map((v,i)=>v-y[i]));
 const errTxt=e=>e.name==='NotAllowedError'?'Dibatalkan atau ditolak. Coba lagi.':(e.message||'Gagal. Coba lagi.');
-let step=0,bioType=null,fpResp=null,fpCid=null,faceDesc=null,stream=null,modelsOk=false;
+let step=0,bioType=null,fpId=null,faceDesc=null,stream=null,modelsOk=false;
 function stopCam(){if(stream){stream.getTracks().forEach(t=>t.stop());stream=null}}
 async function startCam(v){
   stopCam();
@@ -205,23 +198,38 @@ $('tL').onclick=()=>sw(true);$('tR').onclick=()=>sw(false);
 $('lF').innerHTML=$('oF').innerHTML;$('lM').innerHTML=$('oM').innerHTML;
 
 /* masuk */
+function needAcc(type){
+  const a=getAcc();
+  if(!a)throw new Error('Belum ada akun di perangkat ini. Daftar dulu.');
+  if(a.type!==type)throw new Error('Akun di perangkat ini memakai '+(a.type==='face'?'muka.':'sidik jari.'));
+  return a;
+}
+async function enter(a){
+  const {error}=await db.auth.signInWithPassword({email:a.email,password:a.password});
+  if(error)throw new Error('Akun tidak ditemukan di server. Daftar ulang.');
+  stopCam();await boot();
+}
 $('lF').onclick=async()=>{
   stopCam();$('lcw').classList.add('hide');say($('lm'),'');
   try{
-    if(!window.SimpleWebAuthnBrowser)throw new Error('Browser ini tidak mendukung sidik jari.');
-    const o=await call({action:'login_begin'});
-    const resp=await SimpleWebAuthnBrowser.startAuthentication(o.options);
-    await enter(await call({action:'login_fp',cid:o.cid,response:resp}));
+    const a=needAcc('fingerprint');
+    if(!window.PublicKeyCredential)throw new Error('Browser ini tidak mendukung sidik jari.');
+    await navigator.credentials.get({publicKey:{challenge:rnd(32),allowCredentials:[{type:'public-key',id:unb64(a.credId)}],userVerification:'required',timeout:60000}});
+    await enter(a);
   }catch(e){say($('lm'),errTxt(e))}
 };
 $('lM').onclick=async()=>{
-  say($('lm'),'');$('lcw').classList.remove('hide');
-  try{await startCam($('lcam'))}catch(e){say($('lm'),e.message)}
+  say($('lm'),'');
+  try{needAcc('face');$('lcw').classList.remove('hide');await startCam($('lcam'))}catch(e){say($('lm'),e.message)}
 };
 $('lscan').onclick=async()=>{
   const b=$('lscan');b.disabled=true;say($('lm'),'Memindai...',true);
-  try{await enter(await call({action:'login_face',descriptor:await scan($('lcam'))}))}
-  catch(e){say($('lm'),errTxt(e))}
+  try{
+    const a=needAcc('face');
+    const d=await scan($('lcam'));
+    if(dist(d,a.desc)>0.5)throw new Error('Muka tidak dikenali.');
+    await enter(a);
+  }catch(e){say($('lm'),errTxt(e))}
   b.disabled=false;
 };
 
@@ -230,7 +238,7 @@ document.querySelector('[data-s="0"] [data-next]').onclick=()=>{
   if($('ru').value.trim().length<3)return say($('rm'),'Nama pengguna minimal 3 karakter.');
   go(1)};
 function pick(t){
-  bioType=t;fpResp=fpCid=faceDesc=null;stopCam();say($('rm'),'');
+  bioType=t;fpId=faceDesc=null;stopCam();say($('rm'),'');
   $('oF').classList.toggle('on',t==='fingerprint');$('oM').classList.toggle('on',t==='face');
   $('pF').classList.toggle('hide',t!=='fingerprint');$('pM').classList.toggle('hide',t!=='face');
   $('ring').classList.remove('done');$('fpt').textContent='Perangkat akan meminta verifikasi sidik jari.';
@@ -244,10 +252,13 @@ $('bio').onclick=async()=>{
   const btn=$('bio');btn.disabled=true;say($('rm'),'');
   try{
     if(bioType==='fingerprint'){
-      if(!window.SimpleWebAuthnBrowser)throw new Error('Browser ini tidak mendukung sidik jari. Gunakan Chrome/Safari lewat HTTPS.');
-      const o=await call({action:'reg_begin',username:$('ru').value.trim()});
-      fpResp=await SimpleWebAuthnBrowser.startRegistration(o.options);fpCid=o.cid;
-      $('ring').classList.add('done');$('fpt').textContent='Sidik jari terdaftar.';
+      if(!window.PublicKeyCredential)throw new Error('Browser ini tidak mendukung sidik jari. Gunakan Chrome/Safari lewat HTTPS.');
+      const u=$('ru').value.trim();
+      const c=await navigator.credentials.create({publicKey:{
+        challenge:rnd(32),rp:{name:'ArcZ Community'},user:{id:rnd(16),name:u,displayName:u},
+        pubKeyCredParams:[{type:'public-key',alg:-7},{type:'public-key',alg:-257}],
+        authenticatorSelection:{authenticatorAttachment:'platform',userVerification:'required'},timeout:60000}});
+      fpId=b64(c.rawId);$('ring').classList.add('done');$('fpt').textContent='Sidik jari terdaftar.';
     }else{
       if(!stream)throw new Error('Kamera belum aktif.');
       $('mt').textContent='Memindai...';
@@ -260,11 +271,20 @@ $('bio').onclick=async()=>{
   }
   btn.disabled=false;
 };
-$('bn').onclick=()=>{if(!fpResp&&!faceDesc)return say($('rm'),'Daftarkan sidik jari atau muka dulu.');go(2)};
+$('bn').onclick=()=>{if(!fpId&&!faceDesc)return say($('rm'),'Daftarkan sidik jari atau muka dulu.');go(2)};
 async function finish(phone){
   $('fin').disabled=$('skip').disabled=true;say($('rm'),'Membuat akun...',true);
   try{
-    await enter(await call({action:'reg_finish',username:$('ru').value.trim(),phone,type:bioType,cid:fpCid,response:fpResp,descriptor:faceDesc}));
+    const u=$('ru').value.trim();
+    const a={email:crypto.randomUUID()+'@arcz.app',password:b64(rnd(24)),type:bioType,credId:fpId,desc:faceDesc};
+    const {data,error}=await db.auth.signUp({email:a.email,password:a.password});
+    if(error||!data.user)throw new Error(error?.message||'Gagal mendaftar.');
+    if(!data.session)throw new Error('Matikan "Confirm email" di Supabase, lalu coba lagi.');
+    const p=await db.from('profiles').insert({id:data.user.id,username:u,bio_type:bioType,fingerprint_id:fpId,phone:phone||null});
+    if(p.error){await db.auth.signOut();throw new Error(p.error.code==='23505'?'Nama pengguna sudah dipakai.':p.error.message)}
+    if(faceDesc)await db.from('biometrics').insert({user_id:data.user.id,face_descriptor:faceDesc});
+    localStorage.setItem(KEY,JSON.stringify(a));
+    stopCam();await boot();
   }catch(e){say($('rm'),errTxt(e));$('fin').disabled=$('skip').disabled=false}
 }
 $('fin').onclick=()=>{const t=$('rt').value.trim();if(t&&!/^[0-9+][0-9\s-]{7,15}$/.test(t))return say($('rm'),'Nomor telepon tidak valid.');finish(t)};
